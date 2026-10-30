@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>同時通訳ボード</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: 上に操作バー、下に「原文 | 訳文」の2列ログ。イヤホン前提で認識と読み上げを同時に動かす */
+:root{
+  --bg:#f3f5f6; --panel:#ffffff; --fg:#17202a; --muted:#5d6b78; --line:#d9dfe4;
+  --accent:#0b6e8a; --accent-ink:#ffffff; --live:#c2410c; --ok:#15803d; --warn:#b45309;
+  --src:#eef2f5; --dst:#e8f4f7;
+  --f-ui:"Zen Kaku Gothic New","Yu Gothic UI","Meiryo",system-ui,sans-serif;
+  --f-mono:"IBM Plex Mono",Consolas,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0f1418; --panel:#171e24; --fg:#e6ecf0; --muted:#93a2ae; --line:#2a343d;
+  --accent:#4fb3cf; --accent-ink:#06222b; --live:#fb923c; --ok:#4ade80; --warn:#fbbf24;
+  --src:#1b242b; --dst:#132a32; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0f1418; --panel:#171e24; --fg:#e6ecf0; --muted:#93a2ae; --line:#2a343d;
+  --accent:#4fb3cf; --accent-ink:#06222b; --live:#fb923c; --ok:#4ade80; --warn:#fbbf24;
+  --src:#1b242b; --dst:#132a32; color-scheme:dark}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 var(--f-ui);
+  display:flex;flex-direction:column}
+header{background:var(--panel);border-bottom:1px solid var(--line);
+  padding:12px max(16px,env(safe-area-inset-right,0px)) 12px max(16px,env(safe-area-inset-left,0px));
+  display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center}
+h1{font-size:17px;margin:0 8px 0 0;font-weight:700;letter-spacing:.02em}
+.group{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+label{font-size:12px;color:var(--muted);letter-spacing:.04em}
+select,input,textarea,button{font:inherit;color:var(--fg)}
+select,input[type=password],input[type=text],textarea{background:var(--bg);border:1px solid var(--line);
+  border-radius:6px;padding:5px 8px}
+button{border:1px solid var(--line);background:var(--panel);border-radius:6px;padding:6px 12px;cursor:pointer}
+button:hover{border-color:var(--accent)}
+button:focus-visible,select:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+#startBtn{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:700;min-width:120px}
+#startBtn.on{background:var(--live);border-color:var(--live);color:#fff}
+.status{font-family:var(--f-mono);font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--line)}
+.dot.on{background:var(--live);animation:pulse 1.2s infinite}
+@keyframes pulse{50%{opacity:.35}}
+@media (prefers-reduced-motion:reduce){.dot.on{animation:none}}
+details{background:var(--panel);border-bottom:1px solid var(--line);
+  padding:8px max(16px,env(safe-area-inset-right,0px)) 8px max(16px,env(safe-area-inset-left,0px))}
+summary{cursor:pointer;font-size:13px;color:var(--muted)}
+.settings{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px 20px;padding:10px 0 4px}
+.settings .field{display:flex;flex-direction:column;gap:4px;min-width:0}
+.settings textarea{min-height:64px;resize:vertical}
+.hint{font-size:12px;color:var(--muted)}
+main{flex:1;overflow:auto;padding:12px max(16px,env(safe-area-inset-right,0px)) 12px max(16px,env(safe-area-inset-left,0px))}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:0 12px;position:sticky;top:-12px;background:var(--bg);
+  padding:4px 0 6px;font-size:12px;color:var(--muted);letter-spacing:.06em;z-index:1}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:8px}
+.row>div{border-radius:8px;padding:8px 12px;min-width:0;overflow-wrap:anywhere}
+.src{background:var(--src)}
+.dst{background:var(--dst);font-size:16px}
+.dst.pending{color:var(--muted);font-style:italic}
+.dst.err{color:var(--warn)}
+.t{font-family:var(--f-mono);font-size:11px;color:var(--muted);display:block}
+#interim{color:var(--muted);border:1px dashed var(--line);border-radius:8px;padding:8px 12px;min-height:40px;margin-top:4px}
+.empty{color:var(--muted);padding:24px 0;max-width:62ch}
+.empty ol{padding-left:1.2em}
+@media (max-width:640px){.row,.cols{grid-template-columns:1fr}.cols span:last-child{display:none}}
+</style>
+</head>
+<body>
+<header>
+  <h1>同時通訳ボード</h1>
+  <div class="group">
+    <label for="srcLang">聞く言語</label>
+    <select id="srcLang"></select>
+    <button id="swapBtn" title="言語を入れ替え" aria-label="言語を入れ替え">⇄</button>
+    <label for="dstLang">訳す言語</label>
+    <select id="dstLang"></select>
+  </div>
+  <div class="group">
+    <label for="ttsOn">読み上げ</label>
+    <input type="checkbox" id="ttsOn" checked>
+    <label for="rate">速さ</label>
+    <input type="range" id="rate" min="0.8" max="1.8" step="0.1" value="1.2" style="width:90px">
+  </div>
+  <button id="startBtn">開始</button>
+  <div class="status"><span class="dot" id="dot"></span><span id="statusText">待機中</span></div>
+  <div class="group" style="margin-left:auto">
+    <button id="copyBtn">ログをコピー</button>
+    <button id="saveBtn">保存</button>
+    <button id="clearBtn">消去</button>
+  </div>
+</header>
+
+<details id="settingsBox">
+  <summary>翻訳エンジンと設定</summary>
+  <div class="settings">
+    <div class="field">
+      <label for="engine">翻訳エンジン</label>
+      <select id="engine">
+        <option value="chrome">Chrome内蔵翻訳(無料・高速・端末内)</option>
+        <option value="claude">Claude API(高精度・用語集と文脈を反映)</option>
+      </select>
+      <span class="hint" id="engineHint"></span>
+    </div>
+    <div class="field">
+      <label for="apiKey">Claude APIキー(Claude API使用時のみ)</label>
+      <input type="password" id="apiKey" placeholder="sk-ant-..." autocomplete="off">
+      <span class="hint">このPCのブラウザ内にだけ保存されます。料金はAPIの従量課金です。</span>
+    </div>
+    <div class="field">
+      <label for="model">Claudeモデル</label>
+      <select id="model">
+        <option value="claude-haiku-5-5">Haiku 5.5(速い・推奨)</option>
+        <option value="claude-sonnet-5-5">Sonnet 5.5(より自然)</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="glossary">用語集・話題(Claude API使用時)</label>
+      <textarea id="glossary" placeholder="例: 半導体の決算説明会。wafer=ウェハー, guidance=業績見通し, gross margin=粗利率, HBM=HBM"></textarea>
+    </div>
+    <div class="field">
+      <label for="voice">読み上げの声</label>
+      <select id="voice"></select>
+      <span class="hint">イヤホンを使ってください。スピーカーだと訳文をマイクが拾います。</span>
+    </div>
+  </div>
+</details>
+
+<main id="main">
+  <div class="cols"><span>原文</span><span>訳文</span></div>
+  <div id="log">
+    <div class="empty" id="empty">
+      <p>イヤホンを付けて「開始」を押すと、話している音声を文の区切りごとに翻訳し、訳文を読み上げます。話し続けている間も認識は止まりません。</p>
+      <ol>
+        <li>Chromeで開いてください(Edgeは音声認識が不安定なことがあります)。</li>
+        <li>初回はマイクの許可を求められます。</li>
+        <li>Chrome内蔵翻訳は初回だけ言語モデルのダウンロードが入ります。</li>
+      </ol>
+    </div>
+  </div>
+  <div id="interim" aria-live="polite"></div>
+</main>
+
+<script>
+(function(){
+const LANGS=[
+  ["en-US","英語(米)","en"],["en-GB","英語(英)","en"],["ja-JP","日本語","ja"],
+  ["zh-CN","中国語(簡体)","zh"],["zh-TW","中国語(繁体)","zh-Hant"],["ko-KR","韓国語","ko"],
+  ["es-ES","スペイン語","es"],["fr-FR","フランス語","fr"],["de-DE","ドイツ語","de"],["de-AT","ドイツ語(オーストリア)","de"],
+  ["vi-VN","ベトナム語","vi"],["th-TH","タイ語","th"]
+];
+const $=id=>document.getElementById(id);
+const store={get(k,d){try{const v=localStorage.getItem("lib_"+k);return v===null?d:v}catch(e){return d}},
+             set(k,v){try{localStorage.setItem("lib_"+k,v)}catch(e){}}};
+
+for(const [code,name] of LANGS){
+  $("srcLang").add(new Option(name,code));
+  $("dstLang").add(new Option(name,code));
+}
+$("srcLang").value=store.get("src","en-US");
+$("dstLang").value=store.get("dst","ja-JP");
+$("engine").value=store.get("engine","chrome");
+$("apiKey").value=store.get("key","");
+$("model").value=store.get("model","claude-haiku-5-5");
+$("glossary").value=store.get("glossary","");
+$("rate").value=store.get("rate","1.2");
+$("ttsOn").checked=store.get("tts","1")==="1";
+for(const id of ["srcLang","dstLang","engine","apiKey","model","glossary","rate"])
+  $(id).addEventListener("change",()=>{store.set({srcLang:"src",dstLang:"dst",apiKey:"key"}[id]||id,$(id).value);updateHint();fillVoices();
+    if(id==="srcLang"||id==="dstLang"||id==="engine") onLangChange();});
+$("ttsOn").addEventListener("change",()=>{store.set("tts",$("ttsOn").checked?"1":"0");if(!$("ttsOn").checked)speechSynthesis.cancel();});
+
+const short=code=>LANGS.find(l=>l[0]===code)[2];
+const nameOf=code=>LANGS.find(l=>l[0]===code)[1];
+
+function updateHint(){
+  const h=$("engineHint");
+  if($("engine").value==="chrome"){
+    h.textContent=("Translator" in self)?"使えます。用語集は反映されません。":"このブラウザには内蔵翻訳がありません。Chrome 138以降を使うか、Claude APIを選んでください。";
+  }else{
+    h.textContent=$("apiKey").value?"APIキー設定済み。直前の数文を文脈として渡します。":"APIキーを入力してください(console.anthropic.comで発行)。";
+  }
+}
+updateHint();
+if(!("Translator" in self) && store.get("engine",null)===null) $("engine").value="claude";
+
+/* ---- voices ---- */
+function fillVoices(){
+  const want=$("dstLang").value.toLowerCase(), base=want.split("-")[0];
+  const vs=speechSynthesis.getVoices().filter(v=>v.lang.toLowerCase().replace("_","-").startsWith(base));
+  const sel=$("voice"), prev=store.get("voice_"+base,"");
+  sel.innerHTML="";
+  sel.add(new Option("自動",""));
+  vs.forEach(v=>sel.add(new Option(v.name+(v.localService?"":" (オンライン)"),v.name)));
+  // 既定は端末内の声(Microsoft Nanami など)。Chromeのオンライン音声は約15秒で途切れる不具合がある
+  const local=vs.find(v=>v.localService);
+  sel.value=vs.some(v=>v.name===prev)?prev:(local?local.name:"");
+}
+speechSynthesis.onvoiceschanged=fillVoices; fillVoices();
+$("voice").addEventListener("change",()=>store.set("voice_"+$("dstLang").value.split("-")[0],$("voice").value));
+
+$("swapBtn").onclick=()=>{
+  const a=$("srcLang").value; $("srcLang").value=$("dstLang").value; $("dstLang").value=a;
+  store.set("src",$("srcLang").value); store.set("dst",$("dstLang").value);
+  fillVoices(); onLangChange();
+};
+// 言語を変えたら、クリック中(ユーザー操作中)に翻訳モデルを準備し、認識を新しい言語で再起動する
+function onLangChange(){
+  translator=null;
+  if($("engine").value==="chrome" && ("Translator" in self)){
+    getChromeTranslator().then(()=>{ if(running) setStatus(`${nameOf($("srcLang").value)} → ${nameOf($("dstLang").value)} で聞き取り中`); })
+      .catch(e=>setStatus(e.message));
+  }
+  if(running && rec){ try{rec.stop()}catch(e){} }
+}
+
+/* ---- translation engines ---- */
+let translator=null, translatorKey="";
+async function getChromeTranslator(){
+  const s=short($("srcLang").value), d=short($("dstLang").value), key=s+">"+d;
+  if(translator && translatorKey===key) return translator;
+  const avail=await Translator.availability({sourceLanguage:s,targetLanguage:d});
+  if(avail==="unavailable") throw new Error(`内蔵翻訳は ${nameOf($("srcLang").value)}→${nameOf($("dstLang").value)} に対応していません`);
+  if(avail!=="available") setStatus("翻訳モデルをダウンロード中…");
+  translator=await Translator.create({sourceLanguage:s,targetLanguage:d,
+    monitor(m){m.addEventListener("downloadprogress",e=>setStatus(`翻訳モデル取得中 ${Math.round(e.loaded*100)}%`))}});
+  translatorKey=key;
+  return translator;
+}
+
+const history=[];
+async function claudeTranslate(text){
+  const key=$("apiKey").value.trim();
+  if(!key) throw new Error("Claude APIキーが未設定です(設定を開いて入力)");
+  const ctx=history.slice(-4).map(h=>`原文: ${h.src}\n訳文: ${h.dst}`).join("\n");
+  const sys=`あなたは同時通訳者です。${nameOf($("srcLang").value)}の発話を${nameOf($("dstLang").value)}に訳します。
+音声認識の結果なので誤認識や句読点の欠落があります。文脈から自然に補って訳してください。
+出力は訳文のみ。説明・引用符・前置きは書かないこと。話し言葉として読み上げやすい文にすること。` +
+    ($("glossary").value.trim()?`\n\n用語集・話題:\n${$("glossary").value.trim()}`:"") +
+    (ctx?`\n\n直前のやりとり(参考):\n${ctx}`:"");
+  const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",
+    headers:{"content-type":"application/json","x-api-key":key,"anthropic-version":"2023-06-01",
+             "anthropic-dangerous-direct-browser-access":"true"},
+    body:JSON.stringify({model:$("model").value,max_tokens:600,system:sys,
+      messages:[{role:"user",content:text}]})});
+  if(!r.ok){
+    let msg=`APIエラー ${r.status}`;
+    try{const j=await r.json(); msg+=": "+(j.error?.message||"")}catch(e){}
+    if(r.status===401) msg="APIキーが無効です。設定で確認してください";
+    throw new Error(msg);
+  }
+  const j=await r.json();
+  return j.content.filter(c=>c.type==="text").map(c=>c.text).join("").trim();
+}
+
+async function translate(text){
+  if($("engine").value==="chrome"){
+    if(!("Translator" in self)) throw new Error("このブラウザに内蔵翻訳がありません。設定でClaude APIを選んでください");
+    const t=await getChromeTranslator();
+    return await t.translate(text);
+  }
+  return await claudeTranslate(text);
+}
+
+/* ---- TTS queue (in order) ---- */
+const speakQueue=[]; let speaking=false;
+function enqueueSpeak(row){speakQueue.push(row);pumpSpeak();}
+function pumpSpeak(){
+  if(speaking) return;
+  while(speakQueue.length && speakQueue[0].done){
+    const row=speakQueue.shift();
+    if(!row.text || !$("ttsOn").checked) continue;
+    // 長い訳文は文ごとに分けて読み上げる(途中で止まるのを防ぐ)
+    const parts=row.text.split(/(?<=[。！？!?]|\.\s)/).map(s=>s.trim()).filter(Boolean);
+    if(!parts.length) continue;
+    if(parts.length>1){ speakQueue.unshift(...parts.slice(1).map(t=>({done:true,text:t}))); }
+    const u=new SpeechSynthesisUtterance(parts[0]);
+    u.lang=$("dstLang").value; u.rate=parseFloat($("rate").value);
+    const vn=$("voice").value; if(vn){const v=speechSynthesis.getVoices().find(x=>x.name===vn); if(v) u.voice=v;}
+    speaking=true;
+    u.onend=u.onerror=()=>{speaking=false;pumpSpeak();};
+    speechSynthesis.speak(u);
+    return;
+  }
+}
+
+/* ---- log ---- */
+const logEl=$("log"), entries=[];
+function addRow(src){
+  $("empty")?.remove();
+  const row=document.createElement("div"); row.className="row";
+  const time=new Date().toLocaleTimeString("ja-JP",{hour12:false});
+  const s=document.createElement("div"); s.className="src";
+  s.innerHTML=`<span class="t">${time}</span>`; s.append(document.createTextNode(src));
+  const d=document.createElement("div"); d.className="dst pending"; d.textContent="翻訳中…";
+  row.append(s,d); logEl.append(row);
+  const main=$("main"); main.scrollTop=main.scrollHeight;
+  const entry={time,src,dst:"",el:d}; entries.push(entry);
+  return entry;
+}
+
+async function handleFinal(text){
+  text=text.trim(); if(!text) return;
+  const e=addRow(text);
+  const slot={done:false,text:""}; enqueueSpeak(slot);
+  try{
+    const out=await translate(text);
+    e.dst=out; e.el.textContent=out; e.el.className="dst";
+    history.push({src:text,dst:out}); if(history.length>12) history.shift();
+    slot.text=out;
+  }catch(err){
+    e.el.textContent=err.message; e.el.className="dst err";
+  }
+  slot.done=true; pumpSpeak();
+  const main=$("main"); main.scrollTop=main.scrollHeight;
+}
+
+/* ---- speech recognition ---- */
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+let rec=null, running=false;
+function setStatus(t){$("statusText").textContent=t}
+
+function startRec(){
+  rec=new SR();
+  rec.lang=$("srcLang").value; rec.continuous=true; rec.interimResults=true; rec.maxAlternatives=1;
+  rec.onresult=ev=>{
+    let interim="";
+    for(let i=ev.resultIndex;i<ev.results.length;i++){
+      const r=ev.results[i];
+      if(r.isFinal) handleFinal(r[0].transcript);
+      else interim+=r[0].transcript;
+    }
+    $("interim").textContent=interim;
+  };
+  rec.onerror=ev=>{
+    if(ev.error==="not-allowed"||ev.error==="service-not-allowed"){
+      setStatus("マイクが許可されていません"); stop();
+    }else if(ev.error==="network"){
+      setStatus("音声認識の通信エラー(再接続します)");
+    }
+  };
+  rec.onend=()=>{ if(running){ rec.lang=$("srcLang").value; try{rec.start()}catch(e){setTimeout(()=>running&&rec.start(),300)} } };
+  rec.start();
+}
+
+async function start(){
+  if(!SR){setStatus("このブラウザは音声認識に対応していません(Chromeで開いてください)");return;}
+  // 内蔵翻訳はユーザー操作中にモデルを準備する
+  if($("engine").value==="chrome" && ("Translator" in self)){
+    try{await getChromeTranslator()}catch(e){setStatus(e.message);return;}
+  }
+  running=true; $("startBtn").textContent="停止"; $("startBtn").classList.add("on"); $("dot").classList.add("on");
+  setStatus(`${nameOf($("srcLang").value)} → ${nameOf($("dstLang").value)} で聞き取り中`);
+  try{ await navigator.wakeLock?.request("screen") }catch(e){}
+  startRec();
+}
+function stop(){
+  running=false; try{rec&&rec.stop()}catch(e){}
+  $("startBtn").textContent="開始"; $("startBtn").classList.remove("on"); $("dot").classList.remove("on");
+  $("interim").textContent="";
+  if(!/許可|対応/.test($("statusText").textContent)) setStatus("停止中");
+}
+$("startBtn").onclick=()=>running?stop():start();
+
+/* ---- export ---- */
+const asText=()=>entries.map(e=>`[${e.time}]\n${e.src}\n→ ${e.dst}`).join("\n\n");
+$("copyBtn").onclick=async()=>{try{await navigator.clipboard.writeText(asText());setStatus("ログをコピーしました")}catch(e){setStatus("コピーできませんでした")}};
+$("saveBtn").onclick=()=>{
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(new Blob([asText()],{type:"text/plain"}));
+  a.download=`通訳ログ_${new Date().toISOString().slice(0,16).replace(/[:T]/g,"-")}.txt`; a.click();
+};
+$("clearBtn").onclick=()=>{entries.length=0;history.length=0;logEl.innerHTML="";speechSynthesis.cancel();speakQueue.length=0;speaking=false;};
+})();
+</script>
+</body>
+</html>

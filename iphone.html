@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="同時通訳">
+<meta name="theme-color" content="#0b6e8a">
+<title>同時通訳ポケット</title>
+<style>
+/* Layout: 1列のカードフィード(訳文を大きく、原文を小さく)+ 画面下に固定の大きな開始ボタン */
+:root{
+  --bg:#f3f5f6; --panel:#ffffff; --fg:#17202a; --muted:#5d6b78; --line:#d9dfe4;
+  --accent:#0b6e8a; --accent-ink:#ffffff; --live:#c2410c; --warn:#b45309; --dst:#e8f4f7;
+  --f-ui:-apple-system,"Hiragino Sans","Hiragino Kaku Gothic ProN",system-ui,sans-serif;
+  --f-mono:ui-monospace,"SF Mono",Menlo,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#0f1418; --panel:#171e24; --fg:#e6ecf0; --muted:#93a2ae; --line:#2a343d;
+  --accent:#4fb3cf; --accent-ink:#06222b; --live:#fb923c; --warn:#fbbf24; --dst:#132a32; color-scheme:dark}}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 var(--f-ui);display:flex;flex-direction:column}
+header{background:var(--panel);border-bottom:1px solid var(--line);
+  padding:calc(env(safe-area-inset-top,0px) + 10px) max(14px,env(safe-area-inset-right,0px)) 10px max(14px,env(safe-area-inset-left,0px));
+  display:flex;align-items:center;gap:8px}
+select,input,textarea,button{font:inherit;color:var(--fg)}
+select,input[type=password],textarea{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:8px 10px;font-size:16px}
+header select{flex:1;min-width:0}
+button{border:1px solid var(--line);background:var(--panel);border-radius:10px;padding:8px 12px}
+#swapBtn,#gearBtn{flex:none;width:44px;height:44px;padding:0;font-size:18px}
+#settings{background:var(--panel);border-bottom:1px solid var(--line);
+  padding:12px max(14px,env(safe-area-inset-right,0px)) 14px max(14px,env(safe-area-inset-left,0px));
+  display:flex;flex-direction:column;gap:12px}
+.field{display:flex;flex-direction:column;gap:4px}
+.field.row{flex-direction:row;align-items:center;justify-content:space-between;gap:12px}
+label{font-size:13px;color:var(--muted)}
+.hint{font-size:12px;color:var(--muted)}
+textarea{min-height:70px}
+main{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;
+  padding:12px max(14px,env(safe-area-inset-right,0px)) 120px max(14px,env(safe-area-inset-left,0px))}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:10px 14px;margin-bottom:10px}
+.card .dst{font-size:19px;line-height:1.5;overflow-wrap:anywhere}
+.card .dst.pending{color:var(--muted);font-size:15px}
+.card .dst.err{color:var(--warn);font-size:14px}
+.card .src{font-size:13px;color:var(--muted);margin-top:6px;overflow-wrap:anywhere}
+.card .t{font-family:var(--f-mono);font-size:11px;color:var(--muted)}
+#interim{color:var(--muted);border:1px dashed var(--line);border-radius:14px;padding:10px 14px;min-height:44px}
+.empty{color:var(--muted);font-size:14px}
+.empty ol{padding-left:1.2em;margin:8px 0}
+footer{position:fixed;left:0;right:0;bottom:0;background:linear-gradient(transparent,var(--bg) 35%);
+  padding:20px max(14px,env(safe-area-inset-right,0px)) calc(env(safe-area-inset-bottom,0px) + 12px) max(14px,env(safe-area-inset-left,0px));
+  display:flex;gap:10px;align-items:center}
+#startBtn{flex:1;height:58px;border-radius:29px;background:var(--accent);color:var(--accent-ink);border:none;font-size:18px;font-weight:700}
+#startBtn.on{background:var(--live);color:#fff}
+#status{position:absolute;left:0;right:0;top:0;text-align:center;font-size:12px;color:var(--muted)}
+#clearBtn{height:58px;border-radius:29px;padding:0 18px}
+button:focus-visible,select:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+</style>
+</head>
+<body>
+<header>
+  <select id="srcLang" aria-label="聞く言語"></select>
+  <button id="swapBtn" aria-label="言語を入れ替え">⇄</button>
+  <select id="dstLang" aria-label="訳す言語"></select>
+  <button id="gearBtn" aria-label="設定">⚙︎</button>
+</header>
+
+<section id="settings" hidden>
+  <div class="field">
+    <label for="apiKey">Claude APIキー</label>
+    <input type="password" id="apiKey" placeholder="sk-ant-..." autocomplete="off">
+    <span class="hint">このiPhoneのSafari内にだけ保存されます。API料金は従量課金です。</span>
+  </div>
+  <div class="field">
+    <label for="model">モデル</label>
+    <select id="model">
+      <option value="claude-haiku-5-5">Haiku 5.5(速い・推奨)</option>
+      <option value="claude-sonnet-5-5">Sonnet 5.5(より自然)</option>
+    </select>
+  </div>
+  <div class="field">
+    <label for="glossary">用語集・話題</label>
+    <textarea id="glossary" placeholder="例: 旅行中のホテルでの会話 / 半導体の決算説明会。guidance=業績見通し"></textarea>
+  </div>
+  <div class="field row">
+    <label for="ttsOn">訳文を読み上げる</label>
+    <input type="checkbox" id="ttsOn" checked>
+  </div>
+  <div class="field">
+    <label for="rate">読み上げの速さ</label>
+    <input type="range" id="rate" min="0.8" max="1.6" step="0.1" value="1.1">
+  </div>
+  <div class="field">
+    <label for="voice">声</label>
+    <select id="voice"></select>
+  </div>
+  <button id="copyBtn">ログをコピー</button>
+</section>
+
+<main id="main">
+  <div id="log">
+    <div class="empty" id="empty">
+      <p>イヤホン(AirPodsなど)を付けて「開始」を押すと、聞こえた言葉を文ごとに訳して読み上げます。</p>
+      <ol>
+        <li>右上の⚙︎でClaude APIキーを入力してください。</li>
+        <li>初回はマイクと音声認識の許可を求められます。</li>
+        <li>ホーム画面に追加すると、アプリのように全画面で使えます。</li>
+      </ol>
+    </div>
+  </div>
+  <div id="interim" aria-live="polite"></div>
+</main>
+
+<footer>
+  <div id="status">待機中</div>
+  <button id="startBtn">開始</button>
+  <button id="clearBtn">消去</button>
+</footer>
+
+<script>
+(function(){
+const LANGS=[["en-US","英語"],["ja-JP","日本語"],["zh-CN","中国語(簡体)"],["zh-TW","中国語(繁体)"],
+  ["ko-KR","韓国語"],["es-ES","スペイン語"],["fr-FR","フランス語"],["de-DE","ドイツ語"],
+  ["vi-VN","ベトナム語"],["th-TH","タイ語"]];
+const $=id=>document.getElementById(id);
+const store={get(k,d){try{const v=localStorage.getItem("lip_"+k);return v===null?d:v}catch(e){return d}},
+             set(k,v){try{localStorage.setItem("lip_"+k,v)}catch(e){}}};
+const nameOf=c=>(LANGS.find(l=>l[0]===c)||[c,c])[1];
+for(const [c,n] of LANGS){$("srcLang").add(new Option(n,c));$("dstLang").add(new Option(n,c));}
+$("srcLang").value=store.get("src","en-US"); $("dstLang").value=store.get("dst","ja-JP");
+$("apiKey").value=store.get("key",""); $("model").value=store.get("model","claude-haiku-5-5");
+$("glossary").value=store.get("glossary",""); $("rate").value=store.get("rate","1.1");
+$("ttsOn").checked=store.get("tts","1")==="1";
+const map={srcLang:"src",dstLang:"dst",apiKey:"key",model:"model",glossary:"glossary",rate:"rate"};
+for(const id in map) $(id).addEventListener("change",()=>{store.set(map[id],$(id).value);fillVoices();});
+$("ttsOn").addEventListener("change",()=>{store.set("tts",$("ttsOn").checked?"1":"0");if(!$("ttsOn").checked)speechSynthesis.cancel();});
+$("gearBtn").onclick=()=>{$("settings").hidden=!$("settings").hidden;};
+if(!$("apiKey").value) $("settings").hidden=false;
+const setStatus=t=>$("status").textContent=t;
+
+/* voices */
+function fillVoices(){
+  const base=$("dstLang").value.split("-")[0];
+  const vs=speechSynthesis.getVoices().filter(v=>v.lang.toLowerCase().replace("_","-").startsWith(base));
+  const sel=$("voice"), prev=store.get("voice_"+base,"");
+  sel.innerHTML=""; sel.add(new Option("自動",""));
+  vs.forEach(v=>sel.add(new Option(v.name,v.name)));
+  sel.value=vs.some(v=>v.name===prev)?prev:"";
+}
+speechSynthesis.onvoiceschanged=fillVoices; fillVoices();
+$("voice").addEventListener("change",()=>store.set("voice_"+$("dstLang").value.split("-")[0],$("voice").value));
+$("swapBtn").onclick=()=>{const a=$("srcLang").value;$("srcLang").value=$("dstLang").value;$("dstLang").value=a;
+  store.set("src",$("srcLang").value);store.set("dst",$("dstLang").value);fillVoices();
+  if(running){try{rec.stop()}catch(e){}}};
+
+/* translate */
+const history=[];
+async function translate(text){
+  const key=$("apiKey").value.trim();
+  if(!key) throw new Error("APIキーが未設定です。右上の⚙︎から入力してください");
+  const ctx=history.slice(-4).map(h=>`原文: ${h.src}\n訳文: ${h.dst}`).join("\n");
+  const sys=`あなたは同時通訳者です。${nameOf($("srcLang").value)}の発話を${nameOf($("dstLang").value)}に訳します。
+音声認識の結果なので誤認識や句読点の欠落があります。文脈から自然に補って訳してください。
+出力は訳文のみ。説明・引用符・前置きは書かないこと。読み上げやすい話し言葉にすること。`+
+   ($("glossary").value.trim()?`\n\n用語集・話題:\n${$("glossary").value.trim()}`:"")+
+   (ctx?`\n\n直前のやりとり(参考):\n${ctx}`:"");
+  const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",
+    headers:{"content-type":"application/json","x-api-key":key,"anthropic-version":"2023-06-01",
+             "anthropic-dangerous-direct-browser-access":"true"},
+    body:JSON.stringify({model:$("model").value,max_tokens:600,system:sys,messages:[{role:"user",content:text}]})});
+  if(!r.ok){
+    if(r.status===401) throw new Error("APIキーが無効です。⚙︎で確認してください");
+    let m=`APIエラー ${r.status}`; try{const j=await r.json();m+=": "+(j.error?.message||"")}catch(e){}
+    throw new Error(m);
+  }
+  const j=await r.json();
+  return j.content.filter(c=>c.type==="text").map(c=>c.text).join("").trim();
+}
+
+/* TTS queue. iOSでは読み上げ中に認識が止まることがあるため、読み上げ後に認識を再開する */
+const q=[]; let speaking=false;
+function pump(){
+  if(speaking) return;
+  while(q.length && q[0].done){
+    const s=q.shift();
+    if(!s.text||!$("ttsOn").checked) continue;
+    const u=new SpeechSynthesisUtterance(s.text);
+    u.lang=$("dstLang").value; u.rate=parseFloat($("rate").value);
+    const vn=$("voice").value; if(vn){const v=speechSynthesis.getVoices().find(x=>x.name===vn); if(v)u.voice=v;}
+    speaking=true;
+    u.onend=u.onerror=()=>{speaking=false; ensureRec(); pump();};
+    speechSynthesis.speak(u); return;
+  }
+}
+
+/* log */
+const entries=[];
+function addCard(src){
+  $("empty")?.remove();
+  const c=document.createElement("div"); c.className="card";
+  const time=new Date().toLocaleTimeString("ja-JP",{hour12:false,hour:"2-digit",minute:"2-digit",second:"2-digit"});
+  const d=document.createElement("div"); d.className="dst pending"; d.textContent="翻訳中…";
+  const s=document.createElement("div"); s.className="src"; s.textContent=src;
+  const t=document.createElement("div"); t.className="t"; t.textContent=time;
+  c.append(t,d,s); $("log").append(c);
+  scrollEnd();
+  const e={time,src,dst:"",el:d}; entries.push(e); return e;
+}
+const scrollEnd=()=>{const m=$("main");m.scrollTop=m.scrollHeight;};
+
+let lastFinal="";
+async function handleFinal(text){
+  text=text.trim(); if(!text||text===lastFinal) return; lastFinal=text;
+  const e=addCard(text), slot={done:false,text:""}; q.push(slot);
+  try{const out=await translate(text); e.dst=out; e.el.textContent=out; e.el.className="dst";
+      history.push({src:text,dst:out}); if(history.length>12)history.shift(); slot.text=out;}
+  catch(err){e.el.textContent=err.message; e.el.className="dst err";}
+  slot.done=true; pump(); scrollEnd();
+}
+
+/* recognition */
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+let rec=null, running=false, recActive=false, silenceTimer=null, pendingInterim="";
+function flushInterim(){ if(pendingInterim){const t=pendingInterim;pendingInterim="";$("interim").textContent="";handleFinal(t);} }
+function makeRec(){
+  const r=new SR();
+  r.lang=$("srcLang").value; r.continuous=true; r.interimResults=true;
+  r.onstart=()=>{recActive=true; setStatus(`${nameOf($("srcLang").value)} → ${nameOf($("dstLang").value)} 聞き取り中`);};
+  r.onresult=ev=>{
+    let interim="";
+    for(let i=ev.resultIndex;i<ev.results.length;i++){
+      const x=ev.results[i];
+      if(x.isFinal){pendingInterim="";handleFinal(x[0].transcript);}
+      else interim+=x[0].transcript;
+    }
+    pendingInterim=interim; $("interim").textContent=interim;
+    // iOSは確定が遅いことがあるので、1.4秒無音なら途中結果を確定扱いにする
+    clearTimeout(silenceTimer); if(interim) silenceTimer=setTimeout(()=>{flushInterim(); try{r.stop()}catch(e){}},1400);
+  };
+  r.onerror=ev=>{
+    if(ev.error==="not-allowed"||ev.error==="service-not-allowed"){
+      setStatus("マイクか音声認識が許可されていません(設定 > Safari)"); stop();
+    }
+  };
+  r.onend=()=>{recActive=false; flushInterim(); if(running) setTimeout(ensureRec,150);};
+  return r;
+}
+function ensureRec(){
+  if(!running||recActive) return;
+  try{rec=makeRec(); rec.start();}catch(e){setTimeout(ensureRec,400);}
+}
+
+function start(){
+  if(!SR){setStatus("このブラウザは音声認識に対応していません。Safariで開いてください");return;}
+  if(!$("apiKey").value.trim()){$("settings").hidden=false;setStatus("先にAPIキーを入力してください");return;}
+  // iOSはタップ時に読み上げを解錠しておく必要がある
+  try{const u=new SpeechSynthesisUtterance(" ");u.volume=0;speechSynthesis.speak(u);}catch(e){}
+  running=true; $("settings").hidden=true;
+  $("startBtn").textContent="停止"; $("startBtn").classList.add("on");
+  try{navigator.wakeLock?.request("screen")}catch(e){}
+  ensureRec();
+}
+function stop(){
+  running=false; clearTimeout(silenceTimer); try{rec&&rec.stop()}catch(e){}
+  $("startBtn").textContent="開始"; $("startBtn").classList.remove("on");
+  if(!/許可|対応|APIキー/.test($("status").textContent)) setStatus("停止中");
+}
+$("startBtn").onclick=()=>running?stop():start();
+$("clearBtn").onclick=()=>{entries.length=0;history.length=0;$("log").innerHTML="";speechSynthesis.cancel();q.length=0;speaking=false;};
+$("copyBtn").onclick=async()=>{
+  const txt=entries.map(e=>`[${e.time}]\n${e.src}\n→ ${e.dst}`).join("\n\n");
+  try{await navigator.clipboard.writeText(txt);setStatus("ログをコピーしました")}catch(e){setStatus("コピーできませんでした")}};
+document.addEventListener("visibilitychange",()=>{if(document.hidden&&running)stop();});
+})();
+</script>
+</body>
+</html>
